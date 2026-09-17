@@ -1,0 +1,16 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python cache & temporary files
+__pycache__/
+*.pyc
+
+# Dataset and generated audio/image assets
+data/
+*.zip
+*.wav
+*.png
+
+# VS Code directory settings
+.vscode/
