@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Virtual environment
 venv/
 .venv/
@@ -13,4 +14,3 @@ data/
 *.png
 
 # VS Code directory settings
-.vscode/
