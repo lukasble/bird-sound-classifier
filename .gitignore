@@ -1,0 +1,16 @@
+# Virtuell miljö
+venv/
+__pycache__/
+*.pyc
+
+# Tunga datafiler och modellvikter
+data/
+*.ogg
+*.wav
+*.mp3
+*.csv
+*.pt
+*.pth
+
+# IDE-inställningar
+.vscode/
