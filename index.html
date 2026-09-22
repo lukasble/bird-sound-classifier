@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Svenska Fågelläten - AI Identifierare</title>
+  <!-- Importera ONNX Runtime Web via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+</head>
+<body style="font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px;">
+  <h1> Identifiera Svenska Fågelläten</h1>
+  <p>Ladda upp en ljudfil (.wav eller .mp3) för att analysera lätet med AI.</p>
+
+  <div style="border: 2px dashed #ccc; padding: 20px; text-align: center; margin: 20px 0;">
+    <input type="file" id="audio-input" accept="audio/*">
+    <p id="status" style="margin-top: 15px; fontweight: bold;">Laddar AI-modell...</p>
+  </div>
+
+  <div id="results"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
