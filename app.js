@@ -9,31 +9,78 @@ const resultsSection = document.getElementById('results');
 const topSpeciesEl = document.getElementById('top-species');
 const topConfidenceEl = document.getElementById('top-confidence');
 
-// 1. Initiera ONNX och Hämta Class Mapping
+// 1. Initialize ONNX Runtime Session and Fetch Class Mappings
 async function init() {
     try {
-        statusEl.innerText = "Laddar ONNX-modell...";
+        statusEl.innerText = "Loading ONNX model...";
         
         ort.env.wasm.numThreads = 2;
         session = await ort.InferenceSession.create('./models/bird_classifier_efficientnet.onnx', {
             executionProviders: ['webgl', 'wasm']
         });
 
-        statusEl.innerText = "Laddar artmappning...";
+        statusEl.innerText = "Loading species class mapping...";
         const response = await fetch('./models/species_class_mapping.json');
         classMapping = await response.json();
 
-        statusEl.innerText = "Redo! Ladda upp en ljudfil för att klassificera.";
+        statusEl.innerText = "Ready! Upload an audio file to classify.";
         audioInput.disabled = false;
     } catch (err) {
         console.error("Initialization failed:", err);
-        statusEl.innerText = `Fel vid laddning: ${err.message}`;
+        statusEl.innerText = `Error loading model/mapping: ${err.message}`;
         statusEl.style.borderLeftColor = "#e74c3c";
         statusEl.style.backgroundColor = "#fdf2f2";
     }
 }
 
-// 2. Lyssna på filuppladdning
+// 2. Helper Functions for Mel Filterbank Matrix Calculation (PyTorch/Librosa Parity)
+function hzToMel(hz) {
+    return 2595.0 * Math.log10(1.0 + hz / 700.0);
+}
+
+function melToHz(mel) {
+    return 700.0 * (Math.pow(10.0, mel / 2595.0) - 1.0);
+}
+
+// Generates a [numMels, fftSize / 2 + 1] filterbank matrix
+function createMelFilterbank(numMels, fftSize, sampleRate, fMin = 0, fMax = null) {
+    if (!fMax) fMax = sampleRate / 2;
+    const numFftBins = Math.floor(fftSize / 2) + 1;
+    
+    const minMel = hzToMel(fMin);
+    const maxMel = hzToMel(fMax);
+    
+    // Create linearly spaced points on the Mel scale
+    const melPoints = new Float32Array(numMels + 2);
+    for (let i = 0; i < numMels + 2; i++) {
+        melPoints[i] = minMel + (i / (numMels + 1)) * (maxMel - minMel);
+    }
+    
+    const hzPoints = melPoints.map(melToHz);
+    const binPoints = hzPoints.map(hz => Math.floor(((fftSize + 1) * hz) / sampleRate));
+    
+    const filterbank = Array.from({ length: numMels }, () => new Float32Array(numFftBins));
+    
+    for (let m = 1; m <= numMels; m++) {
+        const fPrev = binPoints[m - 1];
+        const fCurr = binPoints[m];
+        const fNext = binPoints[m + 1];
+        
+        for (let k = fPrev; k < fCurr; k++) {
+            if (k < numFftBins) {
+                filterbank[m - 1][k] = (k - fPrev) / (fCurr - fPrev || 1);
+            }
+        }
+        for (let k = fCurr; k < fNext; k++) {
+            if (k < numFftBins) {
+                filterbank[m - 1][k] = (fNext - k) / (fNext - fCurr || 1);
+            }
+        }
+    }
+    return filterbank;
+}
+
+// 3. Audio File Upload Listener
 audioInput.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -41,35 +88,34 @@ audioInput.addEventListener('change', async (e) => {
     audioPlayer.src = URL.createObjectURL(file);
     audioPlayer.style.display = 'block';
 
-    statusEl.innerText = "Extraherar Mel-spektrogram från ljudfilen...";
+    statusEl.innerText = "Extracting Mel-Spectrogram...";
 
     try {
         const audioBuffer = await decodeAudioFile(file);
         const spectrogramTensor = extractMelSpectrogramTensor(audioBuffer);
         
-        statusEl.innerText = "Kör AI-modell i webbläsaren...";
+        statusEl.innerText = "Running ONNX model inference...";
         await runInference(spectrogramTensor);
         
-        statusEl.innerText = "Klassificering klar!";
+        statusEl.innerText = "Classification complete!";
     } catch (err) {
         console.error("Processing failed:", err);
-        statusEl.innerText = `Fel vid ljudbearbetning: ${err.message}`;
+        statusEl.innerText = `Error processing audio: ${err.message}`;
     }
 });
 
-// Avkoda ljudfil via Web Audio API
 async function decodeAudioFile(file) {
     const arrayBuffer = await file.arrayBuffer();
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 32000 });
     return await audioCtx.decodeAudioData(arrayBuffer);
 }
 
-// Extrahera exakt 1x128x313 Log-Mel-Spektrogram
+// Extract exact [1, 1, 128, 313] Log-Mel-Spectrogram Tensor matching PyTorch preprocessing
 function extractMelSpectrogramTensor(audioBuffer) {
-    const pcmData = audioBuffer.getChannelData(0); // Mono
+    const pcmData = audioBuffer.getChannelData(0); // Mono channel
     const sampleRate = audioBuffer.sampleRate;
     
-    // Välj det mest ljudintensiva 5-sekunderssegmentet (RMS)
+    // Select the highest-energy 5-second window (RMS search)
     const windowSamples = sampleRate * 5;
     let startSample = 0;
 
@@ -90,13 +136,16 @@ function extractMelSpectrogramTensor(audioBuffer) {
 
     const segment = pcmData.slice(startSample, startSample + windowSamples);
 
-    // Parametrar anpassade för 128 mel-band och 313 tidssteg
     const fftSize = 1024;
     const timeFrames = 313;
-    const numBins = 128;
+    const numMels = 128;
     const hopSize = Math.floor((segment.length - fftSize) / (timeFrames - 1));
+    const numFftBins = Math.floor(fftSize / 2) + 1;
     
-    const float32Data = new Float32Array(1 * 1 * numBins * timeFrames);
+    // Create the Mel Filterbank Matrix
+    const melFilterbank = createMelFilterbank(numMels, fftSize, sampleRate);
+    
+    const float32Data = new Float32Array(1 * 1 * numMels * timeFrames);
 
     Meyda.bufferSize = fftSize;
     Meyda.sampleRate = sampleRate;
@@ -106,24 +155,28 @@ function extractMelSpectrogramTensor(audioBuffer) {
         const frameBuffer = segment.slice(frameOffset, frameOffset + fftSize);
         
         if (frameBuffer.length === fftSize) {
-            const spec = Meyda.extract('powerSpectrum', frameBuffer);
+            const powerSpec = Meyda.extract('powerSpectrum', frameBuffer);
             
-            if (spec) {
-                for (let mel = 0; mel < numBins; mel++) {
-                    const binIdx = Math.floor((mel / numBins) * (spec.length / 2));
-                    const val = spec[binIdx] || 1e-6;
-                    // AmplitudeToDB / Log-Mel scaling
-                    const logMel = Math.log10(Math.max(1e-6, val));
-                    float32Data[mel * timeFrames + frame] = logMel;
+            if (powerSpec) {
+                // Dot product of STFT power spectrum and Mel filterbank
+                for (let mel = 0; mel < numMels; mel++) {
+                    let melEnergy = 0.0;
+                    for (let k = 0; k < numFftBins; k++) {
+                        melEnergy += (powerSpec[k] || 0.0) * melFilterbank[mel][k];
+                    }
+                    
+                    // AmplitudeToDB scaling (PyTorch / Librosa standard)
+                    const db = 10.0 * Math.log10(Math.max(1e-10, melEnergy));
+                    float32Data[mel * timeFrames + frame] = db;
                 }
             }
         }
     }
 
-    return new ort.Tensor('float32', float32Data, [1, 1, numBins, timeFrames]);
+    return new ort.Tensor('float32', float32Data, [1, 1, numMels, timeFrames]);
 }
 
-// 3. Kör inferens & Visa resultat
+// 4. Run Model Inference & Render Results
 async function runInference(inputTensor) {
     const feeds = { input_spectrogram: inputTensor };
     const results = await session.run(feeds);
@@ -138,8 +191,7 @@ async function runInference(inputTensor) {
     const topMatch = top5[0];
     const rawMapping = classMapping[topMatch.idx];
     
-    // Stöd för antingen enkel sträng eller struktur med koder/namn
-    const topSpeciesName = typeof rawMapping === 'object' ? (rawMapping.sv || rawMapping.en || rawMapping.code) : (rawMapping || `Art #${topMatch.idx}`);
+    const topSpeciesName = typeof rawMapping === 'object' ? (rawMapping.sv || rawMapping.en || rawMapping.code) : (rawMapping || `Species #${topMatch.idx}`);
     
     topSpeciesEl.innerText = topSpeciesName;
     topConfidenceEl.innerText = `${(topMatch.prob * 100).toFixed(2)}%`;
@@ -170,7 +222,7 @@ function renderChart(top5) {
         data: {
             labels: labels,
             datasets: [{
-                label: 'Konfidensgrad (%)',
+                label: 'Confidence (%)',
                 data: data,
                 backgroundColor: ['#3498db', '#2ecc71', '#9b59b6', '#f1c40f', '#e67e22']
             }]
