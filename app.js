@@ -33,7 +33,7 @@ async function init() {
     }
 }
 
-// 2. Helper Functions for Mel Filterbank Matrix Calculation (PyTorch/Librosa Parity)
+// 2. Helper Functions for Mel Filterbank Calculation (PyTorch / torchaudio Parity)
 function hzToMel(hz) {
     return 2595.0 * Math.log10(1.0 + hz / 700.0);
 }
@@ -42,7 +42,7 @@ function melToHz(mel) {
     return 700.0 * (Math.pow(10.0, mel / 2595.0) - 1.0);
 }
 
-// Generates a [numMels, fftSize / 2 + 1] filterbank matrix
+// Generates a [numMels, fftSize / 2 + 1] filterbank matrix matching torchaudio
 function createMelFilterbank(numMels, fftSize, sampleRate, fMin = 0, fMax = null) {
     if (!fMax) fMax = sampleRate / 2;
     const numFftBins = Math.floor(fftSize / 2) + 1;
@@ -50,7 +50,6 @@ function createMelFilterbank(numMels, fftSize, sampleRate, fMin = 0, fMax = null
     const minMel = hzToMel(fMin);
     const maxMel = hzToMel(fMax);
     
-    // Create linearly spaced points on the Mel scale
     const melPoints = new Float32Array(numMels + 2);
     for (let i = 0; i < numMels + 2; i++) {
         melPoints[i] = minMel + (i / (numMels + 1)) * (maxMel - minMel);
@@ -104,18 +103,19 @@ audioInput.addEventListener('change', async (e) => {
     }
 });
 
+// Decodes audio file and resamples to 32 kHz (Nyquist-Shannon target rate)
 async function decodeAudioFile(file) {
     const arrayBuffer = await file.arrayBuffer();
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 32000 });
     return await audioCtx.decodeAudioData(arrayBuffer);
 }
 
-// Extract exact [1, 1, 128, 313] Log-Mel-Spectrogram Tensor matching PyTorch preprocessing
+// Extract exact [1, 1, 128, 313] Log-Mel-Spectrogram Tensor with Z-Score Normalization
 function extractMelSpectrogramTensor(audioBuffer) {
-    const pcmData = audioBuffer.getChannelData(0); // Mono channel
+    const pcmData = audioBuffer.getChannelData(0); // Mono channel mix-down
     const sampleRate = audioBuffer.sampleRate;
     
-    // Select the highest-energy 5-second window (RMS search)
+    // Select highest-energy 5-second window (RMS search)
     const windowSamples = sampleRate * 5;
     let startSample = 0;
 
@@ -139,13 +139,11 @@ function extractMelSpectrogramTensor(audioBuffer) {
     const fftSize = 1024;
     const timeFrames = 313;
     const numMels = 128;
-    const hopSize = Math.floor((segment.length - fftSize) / (timeFrames - 1));
+    const hopSize = 512; // Matches HOP_LENGTH_SAMPLES = 512 in Cell 3
     const numFftBins = Math.floor(fftSize / 2) + 1;
     
-    // Create the Mel Filterbank Matrix
     const melFilterbank = createMelFilterbank(numMels, fftSize, sampleRate);
-    
-    const float32Data = new Float32Array(1 * 1 * numMels * timeFrames);
+    const rawSpectrogram = new Float32Array(numMels * timeFrames);
 
     Meyda.bufferSize = fftSize;
     Meyda.sampleRate = sampleRate;
@@ -158,19 +156,37 @@ function extractMelSpectrogramTensor(audioBuffer) {
             const powerSpec = Meyda.extract('powerSpectrum', frameBuffer);
             
             if (powerSpec) {
-                // Dot product of STFT power spectrum and Mel filterbank
                 for (let mel = 0; mel < numMels; mel++) {
                     let melEnergy = 0.0;
                     for (let k = 0; k < numFftBins; k++) {
                         melEnergy += (powerSpec[k] || 0.0) * melFilterbank[mel][k];
                     }
                     
-                    // AmplitudeToDB scaling (PyTorch / Librosa standard)
+                    // AmplitudeToDB transform matching torchaudio
                     const db = 10.0 * Math.log10(Math.max(1e-10, melEnergy));
-                    float32Data[mel * timeFrames + frame] = db;
+                    rawSpectrogram[mel * timeFrames + frame] = db;
                 }
             }
         }
+    }
+
+    // Step 4 from Cell 3: Z-Score Normalization (mean = 0, std = 1)
+    let sum = 0;
+    for (let i = 0; i < rawSpectrogram.length; i++) {
+        sum += rawSpectrogram[i];
+    }
+    const mean = sum / rawSpectrogram.length;
+
+    let squareSum = 0;
+    for (let i = 0; i < rawSpectrogram.length; i++) {
+        const diff = rawSpectrogram[i] - mean;
+        squareSum += diff * diff;
+    }
+    const std = Math.sqrt(squareSum / rawSpectrogram.length) + 1e-6;
+
+    const float32Data = new Float32Array(1 * 1 * numMels * timeFrames);
+    for (let i = 0; i < rawSpectrogram.length; i++) {
+        float32Data[i] = (rawSpectrogram[i] - mean) / std;
     }
 
     return new ort.Tensor('float32', float32Data, [1, 1, numMels, timeFrames]);
