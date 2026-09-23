@@ -1,23 +1,44 @@
 <!DOCTYPE html>
-<html lang="sv">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Svenska Fågelläten - AI Identifierare</title>
-  <!-- Importera ONNX Runtime Web via CDN -->
-  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bird Species Classifier</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- ONNX Runtime Web CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+    <!-- Chart.js for displaying confidence scores -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
-<body style="font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 0 20px;">
-  <h1> Identifiera Svenska Fågelläten</h1>
-  <p>Ladda upp en ljudfil (.wav eller .mp3) för att analysera lätet med AI.</p>
+<body>
+    <div class="container">
+        <header>
+            <h1>🦅 Bird Species Classifier</h1>
+            <p>Upload a audio recording (.wav or .mp3) to identify the bird species directly in your browser using ONNX Runtime Web.</p>
+        </header>
 
-  <div style="border: 2px dashed #ccc; padding: 20px; text-align: center; margin: 20px 0;">
-    <input type="file" id="audio-input" accept="audio/*">
-    <p id="status" style="margin-top: 15px; fontweight: bold;">Laddar AI-modell...</p>
-  </div>
+        <main>
+            <!-- Status Indicator -->
+            <div id="status" class="status-box">Loading ONNX model and class mappings...</div>
 
-  <div id="results"></div>
+            <!-- Audio Input Section -->
+            <section class="upload-section">
+                <input type="file" id="audio-input" accept="audio/*" disabled>
+                <audio id="audio-player" controls style="display: none;"></audio>
+            </section>
 
-  <script src="app.js"></script>
+            <!-- Results Section -->
+            <section id="results" class="results-section" style="display: none;">
+                <h2>Top Match: <span id="top-species">---</span></h2>
+                <p>Confidence: <strong id="top-confidence">0%</strong></p>
+                
+                <div class="chart-container">
+                    <canvas id="confidence-chart"></canvas>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
 </body>
 </html>

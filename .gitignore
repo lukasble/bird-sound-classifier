@@ -1,13 +1,18 @@
-venv/
 __pycache__/
 *.pyc
+.vscode/
 
+# Ignore raw audio & large training datasets
 data/
 *.ogg
 *.wav
 *.mp3
 *.csv
+
+# Ignore heavy PyTorch training checkpoints
 *.pt
 *.pth
 
-.vscode/
+# DO NOT ignore ONNX models or JSON mappings needed for GitHub Pages
+!*.onnx
+!*.json
